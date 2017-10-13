@@ -6,6 +6,9 @@ var fs = require('fs');
 
 var router = express.Router();
 
+// HLS default segment interval in seconds
+var segment_dur = 10;
+
 // Set ffmpeg path
 ffmpeg.setFfmpegPath('C:\\Anaconda3\\Library\\bin\\ffmpeg.exe');
 ffmpeg.setFfprobePath('C:\\Anaconda3\\Library\\bin\\ffprobe.exe');
@@ -20,6 +23,10 @@ router.get('/', function(req, res, next) {
     var process_dir = path.join(process_parent_dir, uuid_v5(req.query.v, uuid_v5.URL));
 
     fs.mkdir(process_dir, function (err) {
+        if (err) {
+            if (err.code !== 'EEXIST') throw err;
+        }
+
         // dump video meta data to json file
         ffmpeg.ffprobe(req.query.v, function(err, metadata) {
             if (err) throw err;
@@ -30,6 +37,49 @@ router.get('/', function(req, res, next) {
                 console.log('Meta data has been exported.');
             });
         });
+
+        // segment video to ts files & generate m3u8 playlist
+        ffmpeg()
+            // input file
+            .input(req.query.v)
+            // set multi-threads to enhance performance
+            .inputOption('-threads 2')
+            // start point
+            .setStartTime(req.query.start)
+            // video codec
+            .videoCodec('libx264')
+            // audio codec
+            .audioCodec('libmp3lame')
+            // set hls segments time
+            .addOption('-hls_time', segment_dur)
+            // include all the segments in the list
+            .addOption('-hls_list_size',0)
+            // set duration
+            .setDuration(req.query.dur)
+
+            // successful
+            .on('end', function() {
+                // touch a file to state status
+                console.log('Segmentation has completed.');
+
+                fs.writeFile(path.join(process_dir, '_SUCCESS'), '', {encoding: 'utf8'}, function (err) {
+                    if (err) throw err;
+                });
+            })
+
+            // fail
+            .on('error', function(err) {
+                // touch a file to state status
+                console.log('Segmentation failed.');
+
+                fs.writeFile(path.join(process_dir, '_FAIL'), err.message, {encoding: 'utf8'}, function (err) {
+                    if (err) throw err;
+                });
+            })
+
+
+            // generate m3u8 file
+            .save(path.join(process_dir, 'dummy.m3u8'));
     });
 
 
