@@ -3,6 +3,7 @@ var ffmpeg = require('fluent-ffmpeg');
 var uuid_v5 = require('uuid/v5');
 var path = require('path');
 var fs = require('fs');
+var qs = require("querystring");
 
 var router = express.Router();
 
@@ -22,18 +23,39 @@ router.get('/', function(req, res, next) {
     // create unique process directory
     var process_dir = path.join(process_parent_dir, uuid_v5(req.query.v, uuid_v5.URL));
 
+    // touch a _FAIL file to indicate error occurs (for external app)
+    var touch_fail = function(err) {
+        fs.writeFile(path.join(process_dir, '_FAIL'), err.message, {encoding: 'utf8'}, function (err) {
+            if (err) {
+                res.status(404).send(err.message);
+                throw err;
+            }
+        });
+    };
+
     fs.mkdir(process_dir, function (err) {
         if (err) {
-            if (err.code !== 'EEXIST') throw err;
+            if (err.code !== 'EEXIST') {
+                res.status(404).send(err.message);
+                throw err;
+            }
         }
 
         // dump video meta data to json file
         ffmpeg.ffprobe(req.query.v, function(err, metadata) {
-            if (err) throw err;
+            if (err) {
+                res.status(404).send(err.message);
+                touch_fail(err);
+                throw err;
+            }
 
             fs.writeFile(path.join(process_dir, 'meta.json'), JSON.stringify(metadata), {encoding: 'utf8'}, function (err) {
 
-                if (err) throw err;
+                if (err) {
+                    res.status(404).send(err.message);
+                    touch_fail(err);
+                    throw err;
+                }
                 console.log('Meta data has been exported.');
             });
         });
@@ -43,7 +65,7 @@ router.get('/', function(req, res, next) {
             // input file
             .input(req.query.v)
             // set multi-threads to enhance performance
-            .inputOption('-threads 2')
+            .inputOption('-threads 4')
             // start point
             .setStartTime(req.query.start)
             // video codec
@@ -62,9 +84,7 @@ router.get('/', function(req, res, next) {
                 // touch a file to state status
                 console.log('Segmentation has completed.');
 
-                fs.writeFile(path.join(process_dir, '_SUCCESS'), '', {encoding: 'utf8'}, function (err) {
-                    if (err) throw err;
-                });
+                fs.writeFile(path.join(process_dir, '_SUCCESS'), '', {encoding: 'utf8'});
             })
 
             // fail
@@ -72,9 +92,7 @@ router.get('/', function(req, res, next) {
                 // touch a file to state status
                 console.log('Segmentation failed.');
 
-                fs.writeFile(path.join(process_dir, '_FAIL'), err.message, {encoding: 'utf8'}, function (err) {
-                    if (err) throw err;
-                });
+                touch_fail(err);
             })
 
 
@@ -82,8 +100,9 @@ router.get('/', function(req, res, next) {
             .save(path.join(process_dir, 'dummy.m3u8'));
     });
 
-
-    res.render('index', { title: 'Express' });
+    // redirect to backward url
+    var burl_params = qs.stringify({dir: process_dir, sdur: segment_dur});
+    res.redirect(req.query.burl + '?' + burl_params);
 });
 
 
